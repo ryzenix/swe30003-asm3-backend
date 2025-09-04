@@ -19,8 +19,12 @@ class AuthRoutes {
 
     setupRoutes() {
         // Session management routes
-        this.router.get('/session', this.authController.getSession.bind(this.authController));
-        this.router.post('/logout', this.authController.logout.bind(this.authController));
+        this.router.get('/session', 
+            this.authController.getSession.bind(this.authController)
+        );
+        this.router.post('/logout', 
+            this.authController.logout.bind(this.authController)
+        );
     }
 
     getRouter() {

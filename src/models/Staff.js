@@ -3,6 +3,11 @@ const Logger = require('../core/Logger');
 const Validator = require('../core/Validator');
 const bcrypt = require('bcrypt');
 const { v4: uuidv4 } = require('uuid');
+const { 
+    ValidationError, 
+    NotFoundError, 
+    ConflictError 
+} = require('../core/errors');
 
 class Staff {
     constructor() {

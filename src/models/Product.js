@@ -1,44 +1,61 @@
 const Database = require('../core/Database');
-const Logger = require('../core/Logger');
 const Validator = require('../core/Validator');
+const ServiceManager = require('../core/ServiceManager');
+const { 
+    ValidationError, 
+    NotFoundError, 
+    ConflictError, 
+    ExternalServiceError 
+} = require('../core/errors');
 
 class Product {
     constructor() {
         this.db = new Database();
-        this.logger = new Logger();
         this.validator = new Validator();
+        
+        // Use ServiceManager to get shared service instances
+        const serviceManager = ServiceManager.getInstance();
+        this.logger = serviceManager.getLogger();
     }
 
     async create(productData) {
         try {
             this.validator.clearErrors();
 
-            // Validate required fields
-            const requiredFields = ['title', 'sku', 'priceValue', 'category'];
+            // Validate required fields - SKU is optional, will be auto-generated if not provided
+            const requiredFields = ['title', 'priceValue', 'category', 'manufacturer', 'unit'];
             if (!this.validator.validateRequired(productData, requiredFields)) {
-                throw new Error(this.validator.getErrors()[0].message);
+                const missingFields = requiredFields.filter(field => 
+                    productData[field] === undefined || productData[field] === null || productData[field] === ''
+                );
+                throw ValidationError.missingFields(missingFields);
+            }
+
+            // Auto-generate SKU if not provided
+            if (!productData.sku || productData.sku.trim() === '') {
+                productData.sku = await this.generateUniqueSKU(productData.title);
             }
 
             // Validate price_value
             if (!this.validator.validateNumber('priceValue', productData.priceValue, 0)) {
-                throw new Error(this.validator.getErrors()[0].message);
+                throw ValidationError.invalidNumber('priceValue', productData.priceValue, 0);
             }
 
             // Validate status
             const validStatuses = ['active', 'inactive', 'out_of_stock'];
             if (!this.validator.validateEnum('status', productData.status, validStatuses)) {
-                throw new Error(this.validator.getErrors()[0].message);
+                throw ValidationError.invalidEnum('status', productData.status, validStatuses);
             }
 
             // Validate stock quantity
             if (!this.validator.validateNumber('stockQuantity', productData.stockQuantity, 0)) {
-                throw new Error(this.validator.getErrors()[0].message);
+                throw ValidationError.invalidNumber('stockQuantity', productData.stockQuantity, 0);
             }
 
             // Validate expiry date format if provided
             if (productData.expiryDate) {
                 if (!this.validator.validateDate('expiryDate', productData.expiryDate)) {
-                    throw new Error(this.validator.getErrors()[0].message);
+                    throw ValidationError.invalidFormat('expiryDate', 'YYYY-MM-DD');
                 }
             }
 
@@ -49,26 +66,29 @@ class Product {
             );
 
             if (existingProducts[0].count > 0) {
-                throw new Error('A product with this SKU already exists');
+                throw ConflictError.duplicateSKU(productData.sku);
             }
+
+            // Auto-calculate formatted price from priceValue
+            const formattedPrice = productData.price || `${parseInt(productData.priceValue).toLocaleString('vi-VN')}đ`;
 
             // Insert product into database
             const { rows: newProduct } = await this.db.query(
                 `INSERT INTO products (
                     title, sku, price, price_value, unit, category, subcategory,
                     manufacturer, status, stock_quantity, expiry_date, requires_prescription,
-                    description, uses, ingredients, usage_instructions, images, main_image_index
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+                    description, uses, ingredients, usage_instructions, images, main_image_index, origin
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
                 RETURNING id`,
                 [
-                    productData.title, productData.sku, productData.price, productData.priceValue, 
-                    productData.unit, productData.category, productData.subcategory,
-                    productData.manufacturer, productData.status || 'inactive', 
-                    productData.stockQuantity || 0, productData.expiryDate, 
-                    productData.requiresPrescription || false, productData.description, 
-                    productData.uses, productData.ingredients || [], 
+                    productData.title, productData.sku, formattedPrice, productData.priceValue, 
+                    productData.unit, productData.category, productData.subcategory || null,
+                    productData.manufacturer, productData.status || 'active', 
+                    productData.stockQuantity || 0, productData.expiryDate || null, 
+                    productData.requiresPrescription || false, productData.description || null, 
+                    productData.uses || null, productData.ingredients || [], 
                     productData.usageInstructions || [], productData.images || [], 
-                    productData.mainImageIndex || 0
+                    productData.mainImageIndex || 0, productData.origin || null
                 ]
             );
 
@@ -100,13 +120,13 @@ class Product {
             );
 
             if (existingProduct.length === 0) {
-                throw new Error('Product not found');
+                throw NotFoundError.product(id);
             }
 
             // Validate price_value if provided
             if (updateData.priceValue !== undefined) {
                 if (!this.validator.validateNumber('priceValue', updateData.priceValue, 0)) {
-                    throw new Error(this.validator.getErrors()[0].message);
+                    throw ValidationError.invalidNumber('priceValue', updateData.priceValue, 0);
                 }
             }
 
@@ -114,21 +134,21 @@ class Product {
             if (updateData.status) {
                 const validStatuses = ['active', 'inactive', 'out_of_stock'];
                 if (!this.validator.validateEnum('status', updateData.status, validStatuses)) {
-                    throw new Error(this.validator.getErrors()[0].message);
+                    throw ValidationError.invalidEnum('status', updateData.status, validStatuses);
                 }
             }
 
             // Validate stock quantity if provided
             if (updateData.stockQuantity !== undefined) {
                 if (!this.validator.validateNumber('stockQuantity', updateData.stockQuantity, 0)) {
-                    throw new Error(this.validator.getErrors()[0].message);
+                    throw ValidationError.invalidNumber('stockQuantity', updateData.stockQuantity, 0);
                 }
             }
 
             // Validate expiry date format if provided
             if (updateData.expiryDate) {
                 if (!this.validator.validateDate('expiryDate', updateData.expiryDate)) {
-                    throw new Error(this.validator.getErrors()[0].message);
+                    throw ValidationError.invalidFormat('expiryDate', 'YYYY-MM-DD');
                 }
             }
 
@@ -140,7 +160,7 @@ class Product {
                 );
 
                 if (skuConflict.length > 0) {
-                    throw new Error('SKU is already taken by another product');
+                    throw ConflictError.resourceTaken('SKU', updateData.sku);
                 }
             }
 
@@ -153,7 +173,7 @@ class Product {
                 'title', 'sku', 'price', 'priceValue', 'unit', 'category', 
                 'subcategory', 'manufacturer', 'status', 'stockQuantity', 'expiryDate', 
                 'requiresPrescription', 'description', 'uses', 'ingredients', 'usageInstructions',
-                'images', 'mainImageIndex'
+                'images', 'mainImageIndex', 'origin'
             ];
 
             for (const field of fieldsToUpdate) {
@@ -166,7 +186,15 @@ class Product {
                                    field === 'mainImageIndex' ? 'main_image_index' : field;
                     
                     updateFields.push(`${dbField} = $${++paramCount}`);
-                    updateValues.push(updateData[field]);
+                    
+                    // If updating priceValue, also auto-update the formatted price
+                    if (field === 'priceValue') {
+                        updateValues.push(updateData[field]);
+                        updateFields.push(`price = $${++paramCount}`);
+                        updateValues.push(`${parseInt(updateData[field]).toLocaleString('vi-VN')}đ`);
+                    } else {
+                        updateValues.push(updateData[field]);
+                    }
                 }
             }
 
@@ -184,7 +212,7 @@ class Product {
                 `SELECT 
                     id, title, sku, price, price_value, unit, category, subcategory,
                     manufacturer, status, stock_quantity, expiry_date, requires_prescription,
-                    description, uses, ingredients, usage_instructions, images, main_image_index
+                    description, uses, ingredients, usage_instructions, images, main_image_index, origin
                 FROM products 
                 WHERE id = $1`,
                 [id]
@@ -216,7 +244,8 @@ class Product {
                     ingredients: product.ingredients || [],
                     usageInstructions: product.usage_instructions || [],
                     images: product.images || [],
-                    mainImageIndex: product.main_image_index || 0
+                    mainImageIndex: product.main_image_index || 0,
+                    origin: product.origin
                 }
             };
 
@@ -229,7 +258,7 @@ class Product {
     async delete(id) {
         try {
             if (!id) {
-                throw new Error('Product ID is required');
+                throw ValidationError.missingFields(['id']);
             }
 
             // Check if product exists
@@ -239,7 +268,7 @@ class Product {
             );
 
             if (existingProduct.length === 0) {
-                throw new Error('Product not found');
+                throw NotFoundError.product(id);
             }
 
             const productTitle = existingProduct[0].title;
@@ -274,21 +303,21 @@ class Product {
     async getById(id) {
         try {
             if (!id) {
-                throw new Error('Product ID is required');
+                throw ValidationError.missingFields(['id']);
             }
 
             const { rows: products } = await this.db.query(
                 `SELECT 
                     id, title, sku, price, price_value, unit, category, subcategory,
                     manufacturer, status, stock_quantity, expiry_date, requires_prescription,
-                    description, uses, ingredients, usage_instructions, images, main_image_index
+                    description, uses, ingredients, usage_instructions, images, main_image_index, origin
                 FROM products 
                 WHERE id = $1`,
                 [id]
             );
 
             if (products.length === 0) {
-                throw new Error('Product not found');
+                throw NotFoundError.product(id);
             }
 
             const product = products[0];
@@ -314,7 +343,8 @@ class Product {
                     ingredients: product.ingredients || [],
                     usageInstructions: product.usage_instructions || [],
                     images: product.images || [],
-                    mainImageIndex: product.main_image_index || 0
+                    mainImageIndex: product.main_image_index || 0,
+                    origin: product.origin
                 }
             };
 
@@ -332,10 +362,16 @@ class Product {
             const category = filters.category || '';
             const status = filters.status || '';
             const manufacturer = filters.manufacturer || '';
+            const sort = filters.sort || '';
 
             // Validate pagination parameters
             if (page < 1 || limit < 1 || limit > 100) {
-                throw new Error('Invalid pagination parameters. Page must be >= 1, limit must be 1-100');
+                throw ValidationError.invalidNumber('pagination', `page: ${page}, limit: ${limit}`, null, null);
+            }
+
+            // Validate sort parameter
+            if (sort && !['price_asc', 'price_desc'].includes(sort)) {
+                throw ValidationError.invalidValue('sort', sort, ['price_asc', 'price_desc']);
             }
 
             const offset = (page - 1) * limit;
@@ -371,6 +407,16 @@ class Product {
 
             const whereClause = whereConditions.length > 0 ? `WHERE ${whereConditions.join(' AND ')}` : '';
 
+            // Build ORDER BY clause
+            let orderByClause = 'ORDER BY ';
+            if (sort === 'price_asc') {
+                orderByClause += 'price_value ASC, title ASC';
+            } else if (sort === 'price_desc') {
+                orderByClause += 'price_value DESC, title ASC';
+            } else {
+                orderByClause += 'title ASC, sku ASC';
+            }
+
             // Count total records
             const countQuery = `
                 SELECT COUNT(*) as total
@@ -387,10 +433,10 @@ class Product {
                 SELECT 
                     id, title, sku, price, price_value, unit, category, subcategory,
                     manufacturer, status, stock_quantity, expiry_date, requires_prescription,
-                    description, uses, ingredients, usage_instructions, images, main_image_index
+                    description, uses, ingredients, usage_instructions, images, main_image_index, origin
                 FROM products
                 ${whereClause}
-                ORDER BY title ASC, sku ASC
+                ${orderByClause}
                 LIMIT $${paramCount + 1} OFFSET $${paramCount + 2}
             `;
 
@@ -418,7 +464,8 @@ class Product {
                 ingredients: product.ingredients || [],
                 usageInstructions: product.usage_instructions || [],
                 images: product.images || [],
-                mainImageIndex: product.main_image_index || 0
+                mainImageIndex: product.main_image_index || 0,
+                origin: product.origin
             }));
 
             return {
@@ -437,7 +484,8 @@ class Product {
                         search,
                         category,
                         status,
-                        manufacturer
+                        manufacturer,
+                        sort
                     }
                 }
             };
@@ -445,6 +493,206 @@ class Product {
         } catch (error) {
             this.logger.error('List products error:', error);
             throw error;
+        }
+    }
+
+    async getFilterOptions() {
+        try {
+            // Get distinct categories and subcategories
+            const { rows: categories } = await this.db.query(`
+                SELECT DISTINCT 
+                    category,
+                    subcategory
+                FROM products 
+                WHERE category IS NOT NULL 
+                ORDER BY category, subcategory
+            `);
+
+            // Get price ranges (min and max)
+            const { rows: priceRange } = await this.db.query(`
+                SELECT 
+                    MIN(price_value) as min_price,
+                    MAX(price_value) as max_price
+                FROM products 
+                WHERE price_value IS NOT NULL
+            `);
+
+            // Get distinct manufacturers
+            const { rows: manufacturers } = await this.db.query(`
+                SELECT DISTINCT manufacturer
+                FROM products 
+                WHERE manufacturer IS NOT NULL 
+                ORDER BY manufacturer
+            `);
+
+            // Get distinct origins
+            const { rows: origins } = await this.db.query(`
+                SELECT DISTINCT origin
+                FROM products 
+                WHERE origin IS NOT NULL 
+                ORDER BY origin
+            `);
+
+            // Get available statuses
+            const { rows: statuses } = await this.db.query(`
+                SELECT DISTINCT status
+                FROM products 
+                WHERE status IS NOT NULL 
+                ORDER BY status
+            `);
+
+            // Count products with discounts (assuming discount field exists or calculate from price logic)
+            const { rows: discountCount } = await this.db.query(`
+                SELECT COUNT(*) as count
+                FROM products 
+                WHERE price_value < (
+                    SELECT AVG(price_value) 
+                    FROM products 
+                    WHERE category = products.category
+                )
+            `);
+
+            // Count products requiring prescription
+            const { rows: prescriptionCount } = await this.db.query(`
+                SELECT 
+                    COUNT(CASE WHEN requires_prescription = true THEN 1 END) as requires_prescription_count,
+                    COUNT(CASE WHEN requires_prescription = false THEN 1 END) as no_prescription_count
+                FROM products
+            `);
+
+            // Process categories to group by category and subcategory
+            const categoryMap = {};
+            categories.forEach(row => {
+                if (!categoryMap[row.category]) {
+                    categoryMap[row.category] = [];
+                }
+                if (row.subcategory && !categoryMap[row.category].includes(row.subcategory)) {
+                    categoryMap[row.category].push(row.subcategory);
+                }
+            });
+
+            // Automatically create price ranges based on actual data distribution
+            const minPrice = priceRange[0]?.min_price || 0;
+            const maxPrice = priceRange[0]?.max_price || 1000000;
+            
+            // Get price distribution to create meaningful ranges
+            const { rows: priceDistribution } = await this.db.query(`
+                SELECT 
+                    price_value,
+                    COUNT(*) as product_count
+                FROM products 
+                WHERE price_value IS NOT NULL 
+                GROUP BY price_value 
+                ORDER BY price_value
+            `);
+
+            // Create dynamic price ranges based on quartiles
+            const priceRanges = [];
+            if (priceDistribution.length > 0) {
+                const priceGap = (maxPrice - minPrice) / 5; // Create 5 ranges
+                
+                for (let i = 0; i < 5; i++) {
+                    const rangeMin = Math.floor(minPrice + (priceGap * i));
+                    const rangeMax = i === 4 ? maxPrice : Math.floor(minPrice + (priceGap * (i + 1)));
+                    
+                    // Format price labels in Vietnamese currency
+                    const formatPrice = (price) => {
+                        if (price >= 1000000) {
+                            return `${(price / 1000000).toFixed(price % 1000000 === 0 ? 0 : 1)}tr`;
+                        } else if (price >= 1000) {
+                            return `${(price / 1000).toFixed(price % 1000 === 0 ? 0 : 0)}k`;
+                        }
+                        return `${price}`;
+                    };
+                    
+                    let label;
+                    if (i === 0) {
+                        label = `Dưới ${formatPrice(rangeMax)}đ`;
+                    } else if (i === 4) {
+                        label = `Trên ${formatPrice(rangeMin)}đ`;
+                    } else {
+                        label = `${formatPrice(rangeMin)}đ - ${formatPrice(rangeMax)}đ`;
+                    }
+                    
+                    priceRanges.push({
+                        label,
+                        min: rangeMin,
+                        max: rangeMax
+                    });
+                }
+            }
+
+            return {
+                success: true,
+                data: {
+                    categories: Object.keys(categoryMap).map(category => ({
+                        category,
+                        subcategories: categoryMap[category]
+                    })),
+                    priceRange: {
+                        min: minPrice,
+                        max: maxPrice,
+                        suggestedRanges: priceRanges
+                    },
+                    manufacturers: manufacturers.map(row => row.manufacturer),
+                    origins: origins.map(row => row.origin),
+                    statuses: statuses.map(row => row.status),
+                    availability: {
+                        hasDiscountedProducts: discountCount[0]?.count > 0,
+                        prescriptionOptions: {
+                            requiresPrescription: prescriptionCount[0]?.requires_prescription_count > 0,
+                            noPrescription: prescriptionCount[0]?.no_prescription_count > 0
+                        }
+                    }
+                }
+            };
+
+        } catch (error) {
+            this.logger.error('Get filter options error:', error);
+            throw error;
+        }
+    }
+
+    // Helper method to generate unique SKU
+    async generateUniqueSKU(productTitle) {
+        try {
+            // Create base SKU from product title
+            const baseSKU = productTitle
+                .toLowerCase()
+                .replace(/[^a-z0-9\s]/g, '') // Remove special characters
+                .replace(/\s+/g, '') // Remove spaces
+                .substring(0, 8) // Take first 8 characters
+                .toUpperCase();
+            
+            // Add timestamp to make it unique
+            const timestamp = Date.now().toString().slice(-6); // Last 6 digits
+            let candidateSKU = `${baseSKU}${timestamp}`;
+            
+            // Check if SKU already exists and generate a new one if needed
+            let counter = 0;
+            while (true) {
+                const { rows: existingProducts } = await this.db.query(
+                    'SELECT COUNT(*) AS count FROM products WHERE sku = $1',
+                    [candidateSKU]
+                );
+
+                if (Number(existingProducts[0].count) === 0) {
+                    return candidateSKU;
+                }
+                
+                // If SKU exists, try with counter
+                counter++;
+                candidateSKU = `${baseSKU}${timestamp}${counter}`;
+                
+                // Prevent infinite loop
+                if (counter > 999) {
+                    throw ExternalServiceError.databaseError('generate unique SKU');
+                }
+            }
+        } catch (error) {
+            this.logger.error('Error generating SKU:', error);
+            // Fallback to timestamp-based SKU
+            return `PROD${Date.now()}`;
         }
     }
 }

@@ -19,19 +19,33 @@ class SuperuserRoutes {
 
     setupRoutes() {
         // Email check
-        this.router.post('/check-email', this.superuserController.checkEmail.bind(this.superuserController));
+        this.router.post('/check-email', 
+            this.superuserController.checkEmail.bind(this.superuserController)
+        );
         
         // Session management
-        this.router.get('/session', this.superuserController.getSession.bind(this.superuserController));
-        this.router.post('/logout', this.superuserController.logout.bind(this.superuserController));
+        this.router.get('/session', 
+            this.superuserController.getSession.bind(this.superuserController)
+        );
+        this.router.post('/logout', 
+            this.superuserController.logout.bind(this.superuserController)
+        );
         
         // WebAuthn registration
-        this.router.post('/register-challenge', this.superuserController.generateRegistrationChallenge.bind(this.superuserController));
-        this.router.post('/register', this.superuserController.register.bind(this.superuserController));
+        this.router.post('/register-challenge', 
+            this.superuserController.generateRegistrationChallenge.bind(this.superuserController)
+        );
+        this.router.post('/register', 
+            this.superuserController.register.bind(this.superuserController)
+        );
         
         // WebAuthn authentication
-        this.router.post('/login-challenge', this.superuserController.generateAuthenticationChallenge.bind(this.superuserController));
-        this.router.post('/login', this.superuserController.login.bind(this.superuserController));
+        this.router.post('/login-challenge', 
+            this.superuserController.generateAuthenticationChallenge.bind(this.superuserController)
+        );
+        this.router.post('/login', 
+            this.superuserController.login.bind(this.superuserController)
+        );
     }
 
     getRouter() {

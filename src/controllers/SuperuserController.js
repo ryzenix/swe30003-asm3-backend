@@ -1,5 +1,10 @@
 const Superuser = require('../models/Superuser');
 const Logger = require('../core/Logger');
+const {
+    ValidationError,
+    AuthenticationError,
+    BusinessLogicError
+} = require('../core/errors');
 
 class SuperuserController {
     constructor() {
@@ -7,20 +12,23 @@ class SuperuserController {
         this.logger = new Logger();
     }
 
-    async checkEmail(req, res) {
+    async checkEmail(req, res, next) {
         try {
             const { email } = req.body;
+            
+            if (!email) {
+                throw ValidationError.missingFields(['email']);
+            }
+            
             const result = await this.superuserModel.checkEmail(email);
             res.json(result);
         } catch (error) {
             this.logger.error('Email check error:', error);
-            res.status(500).json({
-                error: 'Failed to check email: ' + error.message
-            });
+            next(error);
         }
     }
 
-    async getSession(req, res) {
+    async getSession(req, res, next) {
         try {
             if (req.session.authenticated && req.session.userId) {
                 const sessionInfo = await this.superuserModel.getSessionInfo(req.session.userId);
@@ -30,42 +38,43 @@ class SuperuserController {
             }
         } catch (error) {
             this.logger.error('Session check error:', error);
-            res.status(500).json({
-                error: 'Failed to check session: ' + error.message
-            });
+            next(error);
         }
     }
 
-    async logout(req, res) {
+    async logout(req, res, next) {
         try {
-            req.session.destroy((err) => {
-                if (err) {
-                    this.logger.error('Logout error:', err);
-                    return res.status(500).json({
-                        error: 'Failed to logout'
-                    });
-                }
-                res.json({
-                    success: true,
-                    message: 'Logged out successfully'
+            // Use Promise to properly handle async session destruction
+            await new Promise((resolve, reject) => {
+                req.session.destroy((err) => {
+                    if (err) {
+                        this.logger.error('Logout error:', err);
+                        reject(err);
+                    } else {
+                        resolve();
+                    }
                 });
+            });
+
+            res.json({
+                success: true,
+                message: 'Logged out successfully'
             });
         } catch (error) {
             this.logger.error('Logout error:', error);
-            res.status(500).json({
-                error: 'Failed to logout: ' + error.message
-            });
+            next(error);
         }
     }
 
-    async generateRegistrationChallenge(req, res) {
+    async generateRegistrationChallenge(req, res, next) {
         try {
             const { email, fullName } = req.body;
             
             if (!email || !fullName) {
-                return res.status(400).json({
-                    error: 'Missing email or fullName'
-                });
+                const missingFields = [];
+                if (!email) missingFields.push('email');
+                if (!fullName) missingFields.push('fullName');
+                throw ValidationError.missingFields(missingFields);
             }
 
             const result = await this.superuserModel.generateRegistrationChallenge(email, fullName);
@@ -78,28 +87,28 @@ class SuperuserController {
             res.json(result);
         } catch (error) {
             this.logger.error('Registration challenge error:', error);
-            res.status(500).json({
-                error: 'Failed to generate registration challenge: ' + error.message
-            });
+            next(error);
         }
     }
 
-    async register(req, res) {
+    async register(req, res, next) {
         try {
             const { id, rawId, response, userInfo } = req.body;
             
             if (!id || !rawId || !response || !userInfo || !req.session.registrationChallenge || !req.session.pendingUserId) {
-                return res.status(400).json({
-                    error: 'Missing required data or session challenge'
-                });
+                const missingFields = [];
+                if (!id) missingFields.push('id');
+                if (!rawId) missingFields.push('rawId');
+                if (!response) missingFields.push('response');
+                if (!userInfo) missingFields.push('userInfo');
+                if (!req.session.registrationChallenge) missingFields.push('session challenge');
+                throw ValidationError.missingFields(missingFields);
             }
 
             if (Date.now() - req.session.challengeTimestamp > 300000) {
                 delete req.session.registrationChallenge;
                 delete req.session.challengeTimestamp;
-                return res.status(400).json({
-                    error: 'Challenge expired'
-                });
+                throw AuthenticationError.challengeExpired();
             }
 
             const result = await this.superuserModel.verifyRegistration(
@@ -119,13 +128,11 @@ class SuperuserController {
             res.json(result);
         } catch (error) {
             this.logger.error('Registration error:', error);
-            res.status(500).json({
-                error: 'Registration failed: ' + error.message
-            });
+            next(error);
         }
     }
 
-    async generateAuthenticationChallenge(req, res) {
+    async generateAuthenticationChallenge(req, res, next) {
         try {
             const result = await this.superuserModel.generateAuthenticationChallenge();
             
@@ -136,28 +143,26 @@ class SuperuserController {
             res.json(result);
         } catch (error) {
             this.logger.error('Login challenge error:', error);
-            res.status(500).json({
-                error: 'Failed to generate login challenge: ' + error.message
-            });
+            next(error);
         }
     }
 
-    async login(req, res) {
+    async login(req, res, next) {
         try {
             const { id, response } = req.body;
             
             if (!id || !response || !req.session.authChallenge) {
-                return res.status(400).json({
-                    error: 'Missing required data or session challenge'
-                });
+                const missingFields = [];
+                if (!id) missingFields.push('id');
+                if (!response) missingFields.push('response');
+                if (!req.session.authChallenge) missingFields.push('session challenge');
+                throw ValidationError.missingFields(missingFields);
             }
 
             if (Date.now() - req.session.challengeTimestamp > 300000) {
                 delete req.session.authChallenge;
                 delete req.session.challengeTimestamp;
-                return res.status(400).json({
-                    error: 'Challenge expired'
-                });
+                throw AuthenticationError.challengeExpired();
             }
 
             const result = await this.superuserModel.verifyAuthentication(
@@ -177,9 +182,7 @@ class SuperuserController {
             res.json(result);
         } catch (error) {
             this.logger.error('Authentication error:', error);
-            res.status(500).json({
-                error: 'Authentication failed: ' + error.message
-            });
+            next(error);
         }
     }
 }

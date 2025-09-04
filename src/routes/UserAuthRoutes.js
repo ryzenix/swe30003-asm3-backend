@@ -19,15 +19,25 @@ class UserAuthRoutes {
 
     setupRoutes() {
         // Email check
-        this.router.post('/check-email', this.userAuthController.checkEmail.bind(this.userAuthController));
+        this.router.post('/check-email', 
+            this.userAuthController.checkEmail.bind(this.userAuthController)
+        );
         
         // User registration and authentication
-        this.router.post('/register', this.userAuthController.register.bind(this.userAuthController));
-        this.router.post('/login', this.userAuthController.login.bind(this.userAuthController));
-        this.router.post('/logout', this.userAuthController.logout.bind(this.userAuthController));
+        this.router.post('/register', 
+            this.userAuthController.register.bind(this.userAuthController)
+        );
+        this.router.post('/login', 
+            this.userAuthController.login.bind(this.userAuthController)
+        );
+        this.router.post('/logout', 
+            this.userAuthController.logout.bind(this.userAuthController)
+        );
         
         // Password management
-        this.router.post('/change-password', this.userAuthController.changePassword.bind(this.userAuthController));
+        this.router.post('/change-password', 
+            this.userAuthController.changePassword.bind(this.userAuthController)
+        );
     }
 
     getRouter() {

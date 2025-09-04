@@ -1,6 +1,13 @@
 const Database = require('../core/Database');
 const Logger = require('../core/Logger');
 const Validator = require('../core/Validator');
+const {
+    ValidationError,
+    ConflictError,
+    AuthenticationError,
+    NotFoundError,
+    ExternalServiceError
+} = require('../core/errors');
 const base64url = require('base64url');
 const {
     generateRegistrationOptions,
@@ -24,7 +31,7 @@ class Superuser {
     async checkEmail(email) {
         try {
             if (!email) {
-                throw new Error('Email is required');
+                throw ValidationError.missingFields(['email']);
             }
 
             const { rows: existingUsers } = await this.db.query(
@@ -71,12 +78,15 @@ class Superuser {
             this.validator.clearErrors();
 
             if (!email || !fullName) {
-                throw new Error('Email and fullName are required');
+                const missingFields = [];
+                if (!email) missingFields.push('email');
+                if (!fullName) missingFields.push('fullName');
+                throw ValidationError.missingFields(missingFields);
             }
 
             // Validate email
             if (!this.validator.validateEmail('email', email)) {
-                throw new Error(this.validator.getErrors()[0].message);
+                throw ValidationError.invalidFormat('email', 'valid email address');
             }
 
             // Check for existing email
@@ -86,7 +96,7 @@ class Superuser {
             );
 
             if (existingUsers[0].count > 0) {
-                throw new Error('Email already registered');
+                throw ConflictError.duplicateEmail(email);
             }
 
             // Generate user ID
@@ -131,7 +141,13 @@ class Superuser {
             const { id, rawId, response, userInfo } = registrationData;
 
             if (!id || !rawId || !response || !userInfo || !challenge) {
-                throw new Error('Missing required registration data or challenge');
+                const missingFields = [];
+                if (!id) missingFields.push('id');
+                if (!rawId) missingFields.push('rawId');
+                if (!response) missingFields.push('response');
+                if (!userInfo) missingFields.push('userInfo');
+                if (!challenge) missingFields.push('challenge');
+                throw ValidationError.missingFields(missingFields);
             }
 
             const verification = await verifyRegistrationResponse({
@@ -151,7 +167,7 @@ class Superuser {
             });
 
             if (!verification.verified) {
-                throw new Error('Registration verification failed');
+                throw AuthenticationError.challengeExpired();
             }
 
             const { email, fullName } = userInfo;
@@ -164,7 +180,7 @@ class Superuser {
             );
 
             if (existingCredentials[0].count > 0) {
-                throw new Error('This passkey is already registered');
+                throw ConflictError.resourceTaken('Passkey', id);
             }
 
             // Insert superuser
@@ -217,7 +233,11 @@ class Superuser {
             const userHandle = response.userHandle;
 
             if (!id || !response || !challenge) {
-                throw new Error('Missing required authentication data or challenge');
+                const missingFields = [];
+                if (!id) missingFields.push('id');
+                if (!response) missingFields.push('response');
+                if (!challenge) missingFields.push('challenge');
+                throw ValidationError.missingFields(missingFields);
             }
 
             // Fetch credential
@@ -230,14 +250,14 @@ class Superuser {
             );
 
             if (credentials.length === 0) {
-                throw new Error('Credential not found or inactive');
+                throw NotFoundError.user(id);
             }
 
             const credential = credentials[0];
 
             // Verify userHandle
             if (userHandle && userHandle !== credential.user_id) {
-                throw new Error('User handle mismatch');
+                throw AuthenticationError.invalidCredentials();
             }
 
             const verification = await verifyAuthenticationResponse({
@@ -264,7 +284,7 @@ class Superuser {
             });
 
             if (!verification.verified) {
-                throw new Error('Authentication verification failed');
+                throw AuthenticationError.invalidCredentials();
             }
 
             // Update last_used and sign_count

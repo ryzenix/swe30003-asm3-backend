@@ -10,9 +10,8 @@ class Authenticator {
     async authenticateSuperuserOrPharmacist(req, res, next) {
         try {
             if (!req.session.authenticated || !req.session.userId) {
-                return res.status(401).json({
-                    error: 'Unauthorized'
-                });
+                const { AuthenticationError } = require('./errors');
+                return next(AuthenticationError.sessionRequired());
             }
 
             // Check if user is a superuser
@@ -36,24 +35,20 @@ class Authenticator {
             }
 
             // User is neither superuser nor pharmacist
-            return res.status(403).json({
-                error: 'Access denied. Only superusers and pharmacists can access this resource.'
-            });
+            const { AuthorizationError } = require('./errors');
+            return next(AuthorizationError.insufficientPermissions('access this resource (superuser or pharmacist required)'));
 
         } catch (error) {
             this.logger.error('Authentication error:', error);
-            res.status(500).json({
-                error: 'Authentication failed: ' + error.message
-            });
+            next(error);
         }
     }
 
     async authenticateSuperuser(req, res, next) {
         try {
             if (!req.session.authenticated || !req.session.userId) {
-                return res.status(401).json({
-                    error: 'Unauthorized'
-                });
+                const { AuthenticationError } = require('./errors');
+                return next(AuthenticationError.sessionRequired());
             }
 
             const { rows: superuser } = await this.db.query(
@@ -62,47 +57,51 @@ class Authenticator {
             );
 
             if (superuser.length === 0) {
-                return res.status(403).json({
-                    error: 'Access denied. Only superusers can access this resource.'
-                });
+                const { AuthorizationError } = require('./errors');
+                return next(AuthorizationError.insufficientPermissions('access this resource (superuser required)'));
             }
 
             return next();
 
         } catch (error) {
             this.logger.error('Superuser authentication error:', error);
-            res.status(500).json({
-                error: 'Authentication failed: ' + error.message
-            });
+            next(error);
         }
     }
 
     async authenticateUser(req, res, next) {
         try {
             if (!req.session.authenticated || !req.session.userId) {
-                return res.status(401).json({
-                    error: 'Unauthorized'
-                });
+                const { AuthenticationError } = require('./errors');
+                return next(AuthenticationError.sessionRequired());
             }
 
+            // Check if user exists in superusers table first
+            const { rows: superuser } = await this.db.query(
+                'SELECT user_id FROM superusers WHERE user_id = $1 AND is_active = TRUE',
+                [req.session.userId]
+            );
+
+            if (superuser.length > 0) {
+                return next(); // Superuser access granted
+            }
+
+            // Check if user exists in regular users table
             const { rows: user } = await this.db.query(
                 'SELECT user_id FROM users WHERE user_id = $1 AND is_active = TRUE',
                 [req.session.userId]
             );
 
             if (user.length === 0) {
-                return res.status(403).json({
-                    error: 'Access denied. User not found or inactive.'
-                });
+                const { AuthorizationError } = require('./errors');
+                return next(AuthorizationError.insufficientPermissions('access this resource (user not found or inactive)'));
             }
 
             return next();
 
         } catch (error) {
             this.logger.error('User authentication error:', error);
-            res.status(500).json({
-                error: 'Authentication failed: ' + error.message
-            });
+            next(error);
         }
     }
 
@@ -156,22 +155,20 @@ class Authenticator {
         }
     }
 
-    logout(req, res) {
-        try {
+    logout(req) {
+        return new Promise((resolve, reject) => {
             req.session.destroy((err) => {
                 if (err) {
                     this.logger.error('Logout error:', err);
-                    throw new Error('Failed to logout');
+                    reject(new Error('Failed to logout'));
+                } else {
+                    resolve({
+                        success: true,
+                        message: 'Logged out successfully'
+                    });
                 }
-                return {
-                    success: true,
-                    message: 'Logged out successfully'
-                };
             });
-        } catch (error) {
-            this.logger.error('Logout error:', error);
-            throw error;
-        }
+        });
     }
 }
 

@@ -7,27 +7,23 @@ class AuthController {
         this.logger = new Logger();
     }
 
-    async getSession(req, res) {
+    async getSession(req, res, next) {
         try {
             const sessionInfo = await this.authenticator.getSessionInfo(req, res);
             res.json(sessionInfo);
         } catch (error) {
             this.logger.error('Session check error:', error);
-            res.status(500).json({
-                error: 'Failed to check session: ' + error.message
-            });
+            next(error);
         }
     }
 
-    async logout(req, res) {
+    async logout(req, res, next) {
         try {
-            const result = this.authenticator.logout(req, res);
+            const result = await this.authenticator.logout(req);
             res.json(result);
         } catch (error) {
             this.logger.error('Logout error:', error);
-            res.status(500).json({
-                error: 'Failed to logout: ' + error.message
-            });
+            next(error);
         }
     }
 }

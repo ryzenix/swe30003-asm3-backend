@@ -3,6 +3,13 @@ const Logger = require('../core/Logger');
 const Validator = require('../core/Validator');
 const bcrypt = require('bcrypt');
 const { v4: uuidv4 } = require('uuid');
+const { 
+    ValidationError, 
+    NotFoundError, 
+    ConflictError, 
+    AuthenticationError,
+    BusinessLogicError 
+} = require('../core/errors');
 
 class UserAuth {
     constructor() {
@@ -110,7 +117,7 @@ class UserAuth {
     async checkEmail(email) {
         try {
             if (!email) {
-                throw new Error('Email is required');
+                throw ValidationError.missingFields(['email']);
             }
 
             const { rows: existingUsers } = await this.db.query(
@@ -119,7 +126,10 @@ class UserAuth {
             );
 
             return {
-                exists: existingUsers[0].count > 0
+                success: true,
+                data: {
+                    exists: existingUsers[0].count > 0
+                }
             };
         } catch (error) {
             this.logger.error('Email check error:', error);
@@ -136,23 +146,26 @@ class UserAuth {
             // Validate required fields
             const requiredFields = ['email', 'password', 'fullName', 'role'];
             if (!this.validator.validateRequired(userData, requiredFields)) {
-                throw new Error(this.validator.getErrors()[0].message);
+                const missingFields = requiredFields.filter(field => 
+                    userData[field] === undefined || userData[field] === null || userData[field] === ''
+                );
+                throw ValidationError.missingFields(missingFields);
             }
 
             // Validate email format
             if (!this.validator.validateEmail('email', email)) {
-                throw new Error(this.validator.getErrors()[0].message);
+                throw ValidationError.invalidFormat('email');
             }
 
             // Validate role
             const validRoles = ['pharmacist', 'client', 'superuser'];
             if (!this.validator.validateEnum('role', role, validRoles)) {
-                throw new Error(this.validator.getErrors()[0].message);
+                throw ValidationError.invalidEnum('role', role, validRoles);
             }
 
             // Validate gender if provided
             if (gender && !['male', 'female', 'other'].includes(gender)) {
-                throw new Error('Invalid gender value. Must be male, female, or other');
+                throw ValidationError.invalidEnum('gender', gender, ['male', 'female', 'other']);
             }
 
             // Validate date of birth if provided
@@ -163,27 +176,27 @@ class UserAuth {
                 const monthDiff = today.getMonth() - dobDate.getMonth();
                 
                 if (isNaN(dobDate.getTime())) {
-                    throw new Error('Invalid date of birth format. Use YYYY-MM-DD');
+                    throw ValidationError.invalidFormat('dateOfBirth', 'YYYY-MM-DD');
                 }
                 
                 if (age < 0 || (age === 0 && monthDiff < 0) || (age === 0 && monthDiff === 0 && today.getDate() < dobDate.getDate())) {
-                    throw new Error('Date of birth cannot be in the future');
+                    throw BusinessLogicError.futureDate('Date of birth');
                 }
                 
                 if (age > 120) {
-                    throw new Error('Date of birth seems invalid (age too high)');
+                    throw BusinessLogicError.ageRestriction(120, age);
                 }
             }
 
             // Validate phone format
             const phoneRegex = /^(\+84|84|0)[3|5|7|8|9]\d{8}$/;
             if (!phoneRegex.test(phone)) {
-                throw new Error('Invalid phone number format. Expected Vietnamese phone number format');
+                throw ValidationError.invalidFormat('phone', 'Vietnamese phone number format');
             }
 
             // Validate password strength
             if (password.length < 8) {
-                throw new Error('Password must be at least 8 characters long');
+                throw BusinessLogicError.passwordRequirements(['Minimum 8 characters'], password.length);
             }
 
             // Check if email already exists
@@ -193,7 +206,7 @@ class UserAuth {
             );
 
             if (existingUsers[0].count > 0) {
-                throw new Error('An account with this email already exists');
+                throw ConflictError.duplicateEmail(email);
             }
 
             // Hash password
@@ -239,7 +252,10 @@ class UserAuth {
     async login(email, password, clientIP) {
         try {
             if (!email || !password) {
-                throw new Error('Email and password are required');
+                const missingFields = [];
+                if (!email) missingFields.push('email');
+                if (!password) missingFields.push('password');
+                throw ValidationError.missingFields(missingFields);
             }
 
             // Check if IP is currently blocked
@@ -254,7 +270,7 @@ class UserAuth {
                 
                 const secondsRemaining = rows.length > 0 ? Math.max(0, rows[0].seconds_remaining || 0) : 0;
                 
-                throw new Error(`Too many failed login attempts. Try again in ${secondsRemaining} seconds.`);
+                throw AuthenticationError.rateLimited(secondsRemaining);
             }
 
             // Find user by email
@@ -266,7 +282,7 @@ class UserAuth {
             if (users.length === 0) {
                 await this.recordLoginAttempt(clientIP, email, false);
                 const updatedAttemptInfo = await this.getRemainingAttempts(clientIP, email);
-                throw new Error(`Invalid login credentials. ${updatedAttemptInfo.remaining} attempts remaining.`);
+                throw AuthenticationError.invalidCredentials(updatedAttemptInfo.remaining);
             }
 
             const user = users[0];
@@ -280,7 +296,7 @@ class UserAuth {
             if (passwords.length === 0) {
                 await this.recordLoginAttempt(clientIP, email, false);
                 const updatedAttemptInfo = await this.getRemainingAttempts(clientIP, email);
-                throw new Error(`Invalid login credentials. ${updatedAttemptInfo.remaining} attempts remaining.`);
+                throw AuthenticationError.invalidCredentials(updatedAttemptInfo.remaining);
             }
 
             // Verify password
@@ -289,7 +305,7 @@ class UserAuth {
             if (!isValidPassword) {
                 await this.recordLoginAttempt(clientIP, email, false);
                 const updatedAttemptInfo = await this.getRemainingAttempts(clientIP, email);
-                throw new Error(`Invalid login credentials. ${updatedAttemptInfo.remaining} attempts remaining.`);
+                throw AuthenticationError.invalidCredentials(updatedAttemptInfo.remaining);
             }
 
             // Login successful - clear failed attempts
@@ -325,12 +341,15 @@ class UserAuth {
     async changePassword(userId, currentPassword, newPassword) {
         try {
             if (!currentPassword || !newPassword) {
-                throw new Error('Both current and new passwords are required');
+                const missingFields = [];
+                if (!currentPassword) missingFields.push('currentPassword');
+                if (!newPassword) missingFields.push('newPassword');
+                throw ValidationError.missingFields(missingFields);
             }
 
             // Validate new password strength
             if (newPassword.length < 8) {
-                throw new Error('New password must be at least 8 characters long');
+                throw BusinessLogicError.passwordRequirements(['Minimum 8 characters'], newPassword.length);
             }
 
             // Get current password hash
@@ -340,14 +359,14 @@ class UserAuth {
             );
 
             if (passwords.length === 0) {
-                throw new Error('User account not found');
+                throw NotFoundError.user(userId);
             }
 
             // Verify current password
             const isValidPassword = await bcrypt.compare(currentPassword, passwords[0].password_hash);
 
             if (!isValidPassword) {
-                throw new Error('Current password is incorrect');
+                throw AuthenticationError.incorrectPassword('currentPassword');
             }
 
             // Hash new password

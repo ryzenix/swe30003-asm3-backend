@@ -24,10 +24,18 @@ class StaffRoutes {
 
     setupRoutes() {
         // Staff management routes (all require superuser authentication)
-        this.router.get('/list', this.staffController.listStaff.bind(this.staffController));
-        this.router.post('/create-staff', this.staffController.createStaff.bind(this.staffController));
-        this.router.put('/modify/:userId', this.staffController.modifyStaff.bind(this.staffController));
-        this.router.delete('/delete/:userId', this.staffController.deleteStaff.bind(this.staffController));
+        this.router.get('/list', 
+            this.staffController.listStaff.bind(this.staffController)
+        );
+        this.router.post('/create-staff', 
+            this.staffController.createStaff.bind(this.staffController)
+        );
+        this.router.put('/modify/:userId', 
+            this.staffController.modifyStaff.bind(this.staffController)
+        );
+        this.router.delete('/delete/:userId', 
+            this.staffController.deleteStaff.bind(this.staffController)
+        );
     }
 
     getRouter() {
